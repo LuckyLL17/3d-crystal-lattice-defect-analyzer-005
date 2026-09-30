@@ -1,11 +1,92 @@
-import { useMemo, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { useMemo, useRef, useState } from 'react';
+import { Canvas, type RootState } from '@react-three/fiber';
 import { Grid, Line, OrbitControls, Text } from '@react-three/drei';
 import * as THREE from 'three';
 
 type DefectType = 'vacancy' | 'substitution' | 'dislocation';
 type AtomPoint = { key: string; x: number; y: number; z: number; defect?: 'vacancy' | 'substitution' | 'normal'; };
 const colors = { host: '#64c9e1', substitution: '#efb863', vacancy: '#ef7e83', bond: '#4b8190' };
+const defectLabels: Record<DefectType, string> = { vacancy: '空位缺陷', substitution: '替位缺陷', dislocation: '刃型位错' };
+
+type Snapshot = { defect: DefectType; cells: number; showBonds: boolean; planeOpacity: number; atoms: number; neighbors: string; strain: string; exportedAt: Date; };
+const pad = (value: number) => String(value).padStart(2, '0');
+const fileStamp = (date: Date) => `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+function buildSnapshotHtml(snapshot: Snapshot, pngDataUrl: string): string {
+  const { defect, cells, showBonds, planeOpacity, atoms, neighbors, strain, exportedAt } = snapshot;
+  const timeText = exportedAt.toLocaleString('zh-CN', { hour12: false });
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>晶格缺陷实验快照 · ${defectLabels[defect]} · ${timeText}</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 40px 20px 56px; background: #08131a; color: #edf6f7;
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  main { max-width: 960px; margin: 0 auto; }
+  header { border-bottom: 1px solid #274650; padding-bottom: 18px; margin-bottom: 22px; }
+  .eyebrow { font-size: 10px; letter-spacing: .14em; color: #76a9b5; text-transform: uppercase; }
+  h1 { font-size: 22px; margin: 8px 0 6px; }
+  h2 { font-size: 15px; margin: 0 0 14px; }
+  .meta { margin: 0; font-size: 12px; color: #8fb2ba; }
+  figure { margin: 0 0 26px; border: 1px solid #2b5662; border-radius: 8px; overflow: hidden; background: #0d202a; }
+  figure img { display: block; width: 100%; height: auto; }
+  figcaption { padding: 10px 14px; font-size: 11px; color: #8fb2ba; border-top: 1px solid #254550; }
+  section { border: 1px solid #264b57; border-radius: 7px; background: #0e232d; padding: 20px; margin-bottom: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #1d3d47; }
+  tr:last-child th, tr:last-child td { border-bottom: 0; }
+  th { width: 180px; color: #8fb2ba; font-weight: 500; }
+  td { color: #e3f2f4; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .metrics div { padding: 12px 10px; background: #102c36; border: 1px solid #244651; border-radius: 4px; }
+  .metrics span, .metrics b { display: block; }
+  .metrics span { font-size: 10px; color: #6f919a; }
+  .metrics b { font-size: 16px; color: #d9edef; margin-top: 8px; }
+  .note { font-size: 11px; line-height: 1.6; color: #7797a0; margin: 14px 0 0; }
+  footer { text-align: center; font-size: 11px; color: #5f828c; margin-top: 26px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow mono">Crystal Defect Lab · Experiment Snapshot</div>
+    <h1>晶格缺陷实验快照 · ${defectLabels[defect]}</h1>
+    <p class="meta">样品 SAMPLE / FCC-AL-04 · 导出时间 ${timeText} · 截图与参数取自同一渲染时刻</p>
+  </header>
+  <figure>
+    <img src="${pngDataUrl}" alt="三维晶格结构截图（${defectLabels[defect]}，${cells}×${cells}×${cells} 晶胞）" />
+    <figcaption>三维视图截图 · PNG 已内嵌于本文件，离线可查看</figcaption>
+  </figure>
+  <section>
+    <h2>实验参数</h2>
+    <table>
+      <tr><th>缺陷类型</th><td>${defectLabels[defect]}（${defect}）</td></tr>
+      <tr><th>晶胞数量</th><td class="mono">${cells} × ${cells} × ${cells}</td></tr>
+      <tr><th>晶面透明度</th><td class="mono">${Math.round(planeOpacity * 100)}%</td></tr>
+      <tr><th>最近邻连接线</th><td>${showBonds ? '显示' : '隐藏'}</td></tr>
+      <tr><th>原子数</th><td class="mono">${atoms}</td></tr>
+      <tr><th>晶格类型 / 晶格常数</th><td class="mono">FCC · 4.05 Å</td></tr>
+      <tr><th>理论密度 / 温度</th><td class="mono">2.70 g/cm³ · 298 K</td></tr>
+    </table>
+  </section>
+  <section>
+    <h2>结构指标</h2>
+    <div class="metrics">
+      <div><span>原子数</span><b class="mono">${atoms}</b></div>
+      <div><span>平均配位</span><b class="mono">${neighbors}</b></div>
+      <div><span>局部应变</span><b class="mono">${strain}</b></div>
+    </div>
+    <p class="note">指标为演示计算结果，后续可接入真实晶体结构文件与模拟数据。</p>
+  </section>
+  <footer>由 Crystal Defect Lab 本地导出 · 自包含 HTML，不依赖外部字体与网络资源</footer>
+</main>
+</body>
+</html>`;
+}
 function buildAtoms(cells: number, defect: DefectType): AtomPoint[] {
   const atoms: AtomPoint[] = [];
   for (let x = 0; x < cells; x += 1) for (let y = 0; y < cells; y += 1) for (let z = 0; z < cells; z += 1) {
@@ -17,11 +98,11 @@ function buildAtoms(cells: number, defect: DefectType): AtomPoint[] {
   if (defect === 'dislocation') return atoms.filter(atom => !(atom.x === 2 && atom.y === 0 && atom.z === 2));
   return atoms;
 }
-function DefectScene({ cells, defect, showBonds, planeOpacity }: { cells: number; defect: DefectType; showBonds: boolean; planeOpacity: number }) {
+function DefectScene({ cells, defect, showBonds, planeOpacity, onCreated }: { cells: number; defect: DefectType; showBonds: boolean; planeOpacity: number; onCreated: (state: RootState) => void }) {
   const atoms = useMemo(() => buildAtoms(cells, defect), [cells, defect]);
   const points = useMemo(() => atoms.map(atom => new THREE.Vector3((atom.x - (cells - 1) / 2) * 1.25, (atom.y - (cells - 1) / 2) * 1.25, (atom.z - (cells - 1) / 2) * 1.25)), [atoms, cells]);
   const bonds = useMemo(() => { const list: [THREE.Vector3, THREE.Vector3][] = []; atoms.forEach(atom => { const origin = new THREE.Vector3((atom.x - (cells - 1) / 2) * 1.25, (atom.y - (cells - 1) / 2) * 1.25, (atom.z - (cells - 1) / 2) * 1.25); const neighbor = atoms.find(item => item.x === atom.x + 1 && item.y === atom.y && item.z === atom.z); if (neighbor) list.push([origin, new THREE.Vector3((neighbor.x - (cells - 1) / 2) * 1.25, (neighbor.y - (cells - 1) / 2) * 1.25, (neighbor.z - (cells - 1) / 2) * 1.25)]); const zNeighbor = atoms.find(item => item.x === atom.x && item.y === atom.y && item.z === atom.z + 1); if (zNeighbor) list.push([origin, new THREE.Vector3((zNeighbor.x - (cells - 1) / 2) * 1.25, (zNeighbor.y - (cells - 1) / 2) * 1.25, (zNeighbor.z - (cells - 1) / 2) * 1.25)]); }); return list; }, [atoms, cells]);
-  return <Canvas shadows camera={{ position: [8, 6, 8], fov: 38 }}><color attach="background" args={['#09151d']} /><ambientLight intensity={1.25} /><directionalLight position={[5, 8, 5]} intensity={2.3} castShadow /><pointLight position={[-4, 2, 3]} color="#5fd4ee" intensity={12} distance={12} /><group rotation={[.15, -.35, 0]}>{showBonds && bonds.map((bond, index) => <Line key={index} points={bond} color={colors.bond} lineWidth={1.2} transparent opacity={.65} />)}{atoms.map(atom => { const position = [(atom.x - (cells - 1) / 2) * 1.25, (atom.y - (cells - 1) / 2) * 1.25, (atom.z - (cells - 1) / 2) * 1.25] as [number, number, number]; const color = atom.defect === 'substitution' ? colors.substitution : colors.host; return <mesh key={atom.key} position={position} castShadow><sphereGeometry args={[atom.defect === 'substitution' ? .3 : .2, 18, 12]} /><meshStandardMaterial color={color} emissive={atom.defect === 'substitution' ? colors.substitution : '#000'} emissiveIntensity={atom.defect === 'substitution' ? .35 : 0} /></mesh>; })}{defect === 'vacancy' && <mesh position={[0, 0, 0]}><sphereGeometry args={[.35, 16, 12]} /><meshBasicMaterial color={colors.vacancy} transparent opacity={.26} wireframe /></mesh>}{defect === 'dislocation' && <Line points={[new THREE.Vector3(-1.9, -1.9, 0), new THREE.Vector3(-.65, -1.9, 0), new THREE.Vector3(-.65, -.65, 0), new THREE.Vector3(.65, -.65, 0), new THREE.Vector3(.65, .65, 0), new THREE.Vector3(1.9, .65, 0)]} color="#f08d87" lineWidth={4} />}</group><mesh rotation={[0, 0, 0]} position={[0, 0, 0]}><planeGeometry args={[5.6, 5.6]} /><meshBasicMaterial color="#69cde2" transparent opacity={planeOpacity} side={THREE.DoubleSide} /></mesh><Grid args={[8, 8]} cellSize={1.25} sectionSize={2.5} cellColor="#326778" sectionColor="#72b9c9" position={[0, -2.55, 0]} /><OrbitControls makeDefault minDistance={5} maxDistance={15} /></Canvas>;
+  return <Canvas shadows gl={{ preserveDrawingBuffer: true }} camera={{ position: [8, 6, 8], fov: 38 }} onCreated={onCreated}><color attach="background" args={['#09151d']} /><ambientLight intensity={1.25} /><directionalLight position={[5, 8, 5]} intensity={2.3} castShadow /><pointLight position={[-4, 2, 3]} color="#5fd4ee" intensity={12} distance={12} /><group rotation={[.15, -.35, 0]}>{showBonds && bonds.map((bond, index) => <Line key={index} points={bond} color={colors.bond} lineWidth={1.2} transparent opacity={.65} />)}{atoms.map(atom => { const position = [(atom.x - (cells - 1) / 2) * 1.25, (atom.y - (cells - 1) / 2) * 1.25, (atom.z - (cells - 1) / 2) * 1.25] as [number, number, number]; const color = atom.defect === 'substitution' ? colors.substitution : colors.host; return <mesh key={atom.key} position={position} castShadow><sphereGeometry args={[atom.defect === 'substitution' ? .3 : .2, 18, 12]} /><meshStandardMaterial color={color} emissive={atom.defect === 'substitution' ? colors.substitution : '#000'} emissiveIntensity={atom.defect === 'substitution' ? .35 : 0} /></mesh>; })}{defect === 'vacancy' && <mesh position={[0, 0, 0]}><sphereGeometry args={[.35, 16, 12]} /><meshBasicMaterial color={colors.vacancy} transparent opacity={.26} wireframe /></mesh>}{defect === 'dislocation' && <Line points={[new THREE.Vector3(-1.9, -1.9, 0), new THREE.Vector3(-.65, -1.9, 0), new THREE.Vector3(-.65, -.65, 0), new THREE.Vector3(.65, -.65, 0), new THREE.Vector3(.65, .65, 0), new THREE.Vector3(1.9, .65, 0)]} color="#f08d87" lineWidth={4} />}</group><mesh rotation={[0, 0, 0]} position={[0, 0, 0]}><planeGeometry args={[5.6, 5.6]} /><meshBasicMaterial color="#69cde2" transparent opacity={planeOpacity} side={THREE.DoubleSide} /></mesh><Grid args={[8, 8]} cellSize={1.25} sectionSize={2.5} cellColor="#326778" sectionColor="#72b9c9" position={[0, -2.55, 0]} /><OrbitControls makeDefault minDistance={5} maxDistance={15} /></Canvas>;
 }
 function DefectCard({ type, active, onClick, title, subtitle, color }: { type: DefectType; active: boolean; onClick: () => void; title: string; subtitle: string; color: string }) { return <button className={active ? 'defect-card active' : 'defect-card'} onClick={onClick}><span className="defect-symbol" style={{ color }}>{type === 'vacancy' ? '○' : type === 'substitution' ? '◉' : '∿'}</span><span><b>{title}</b><small>{subtitle}</small></span><i>{active ? 'ACTIVE' : 'SELECT'}</i></button>; }
 export default function App() {
@@ -30,6 +111,39 @@ export default function App() {
   const [showBonds, setShowBonds] = useState(true);
   const [planeOpacity, setPlaneOpacity] = useState(.08);
   const [notice, setNotice] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const threeRef = useRef<RootState | null>(null);
+  const exportingRef = useRef(false);
   const metrics = useMemo(() => ({ atoms: defect === 'vacancy' ? cells ** 3 - 1 : cells ** 3, neighbors: defect === 'dislocation' ? '5 / 6' : defect === 'vacancy' ? '5 / 6' : '6 / 6', strain: defect === 'dislocation' ? '8.4%' : defect === 'substitution' ? '3.1%' : '1.7%' }), [cells, defect]);
-  return <div className="app"><header className="topbar"><div className="brand"><div className="brand-icon">◈</div><div><span className="eyebrow">MATERIALS SCIENCE / LATTICE LAB</span><h1>Crystal Defect Lab <span>·</span> 晶格缺陷分析</h1></div></div><div className="header-meta"><span className="sample">SAMPLE / FCC-AL-04</span><button onClick={() => setNotice('结构快照已准备，可接入数据导出')}>导出快照 ↗</button></div></header><main className="layout"><section className="model-card"><div className="model-head"><div><span className="eyebrow">UNIT CELL EXPLORER</span><h2>面心立方晶格 · 缺陷结构可视化</h2></div><div className="head-stats"><span><b>{cells}³</b> 晶胞</span><span><b>{metrics.atoms}</b> 原子</span></div></div><div className="canvas-wrap"><DefectScene cells={cells} defect={defect} showBonds={showBonds} planeOpacity={planeOpacity} /><div className="model-legend"><span><i className="dot host" />基体原子</span><span><i className="dot sub" />缺陷原子</span><span><i className="dot line" />滑移/缺陷线</span></div><div className="model-hint">拖拽旋转 · 滚轮缩放 · 三维晶面已叠加</div></div></section><aside className="sidebar"><section className="panel summary"><span className="eyebrow">STRUCTURE SUMMARY</span><h3>晶格参数</h3><div className="summary-grid"><div><span>晶格类型</span><b>FCC</b></div><div><span>晶格常数</span><b>4.05 Å</b></div><div><span>理论密度</span><b>2.70 g/cm³</b></div><div><span>当前温度</span><b>298 K</b></div></div></section><section className="panel"><div className="panel-title"><div><span className="eyebrow">DEFECT LIBRARY</span><h3>缺陷类型</h3></div><span className="count">3 MODELS</span></div><div className="defect-list"><DefectCard type="vacancy" active={defect === 'vacancy'} onClick={() => setDefect('vacancy')} title="空位缺陷" subtitle="原子位置缺失" color={colors.vacancy} /><DefectCard type="substitution" active={defect === 'substitution'} onClick={() => setDefect('substitution')} title="替位缺陷" subtitle="异质原子替换" color={colors.substitution} /><DefectCard type="dislocation" active={defect === 'dislocation'} onClick={() => setDefect('dislocation')} title="刃型位错" subtitle="局部滑移面错位" color="#ef8d86" /></div></section><section className="panel controls"><div className="panel-title"><div><span className="eyebrow">ANALYSIS CONTROLS</span><h3>分析参数</h3></div></div><label>晶胞数量 <output>{cells} × {cells} × {cells}</output><input type="range" min="3" max="5" value={cells} onChange={event => setCells(Number(event.target.value))} /></label><label>晶面透明度 <output>{Math.round(planeOpacity * 100)}%</output><input type="range" min="0" max=".3" step=".01" value={planeOpacity} onChange={event => setPlaneOpacity(Number(event.target.value))} /></label><button className={showBonds ? 'toggle active' : 'toggle'} onClick={() => setShowBonds(value => !value)}><span className="toggle-dot" />显示最近邻连接</button></section><section className="panel metrics-panel"><span className="eyebrow">DEFECT METRICS</span><h3>结构指标</h3><div className="metric-row"><div><span>原子数</span><b>{metrics.atoms}</b></div><div><span>平均配位</span><b>{metrics.neighbors}</b></div><div><span>局部应变</span><b>{metrics.strain}</b></div></div><p>指标为演示计算结果，后续可接入真实晶体结构文件与模拟数据。</p></section>{notice && <div className="toast" onClick={() => setNotice('')}>{notice}<span>×</span></div>}</aside></main></div>;
+  const handleExport = () => {
+    if (exportingRef.current) return; // 忽略导出中的重复点击，避免失控下载
+    exportingRef.current = true;
+    setExporting(true);
+    const release = () => { exportingRef.current = false; setExporting(false); };
+    try {
+      const three = threeRef.current;
+      if (!three) throw new Error('三维场景尚未就绪');
+      const exportedAt = new Date();
+      // 同一渲染时刻：先强制重绘当前场景，再同步读取画面与参数快照
+      three.gl.render(three.scene, three.camera);
+      const pngDataUrl = three.gl.domElement.toDataURL('image/png');
+      const snapshot: Snapshot = { defect, cells, showBonds, planeOpacity, atoms: metrics.atoms, neighbors: metrics.neighbors, strain: metrics.strain, exportedAt };
+      const blob = new Blob([buildSnapshotHtml(snapshot, pngDataUrl)], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `crystal-defect-${defect}-${cells}x${cells}x${cells}-${fileStamp(exportedAt)}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice('快照已导出为自包含 HTML，请查看浏览器下载');
+      window.setTimeout(release, 800); // 成功后短暂冷却，防止连点重复下载
+    } catch (error) {
+      console.error('导出快照失败', error);
+      setNotice(`导出失败：${error instanceof Error ? error.message : '未知错误'}，相机与模型状态已保留，请重试`);
+      release(); // 失败立即解除占用，允许重试
+    }
+  };
+  return <div className="app"><header className="topbar"><div className="brand"><div className="brand-icon">◈</div><div><span className="eyebrow">MATERIALS SCIENCE / LATTICE LAB</span><h1>Crystal Defect Lab <span>·</span> 晶格缺陷分析</h1></div></div><div className="header-meta"><span className="sample">SAMPLE / FCC-AL-04</span><button onClick={handleExport} disabled={exporting}>{exporting ? '导出中…' : '导出快照 ↗'}</button></div></header><main className="layout"><section className="model-card"><div className="model-head"><div><span className="eyebrow">UNIT CELL EXPLORER</span><h2>面心立方晶格 · 缺陷结构可视化</h2></div><div className="head-stats"><span><b>{cells}³</b> 晶胞</span><span><b>{metrics.atoms}</b> 原子</span></div></div><div className="canvas-wrap"><DefectScene cells={cells} defect={defect} showBonds={showBonds} planeOpacity={planeOpacity} onCreated={state => { threeRef.current = state; }} /><div className="model-legend"><span><i className="dot host" />基体原子</span><span><i className="dot sub" />缺陷原子</span><span><i className="dot line" />滑移/缺陷线</span></div><div className="model-hint">拖拽旋转 · 滚轮缩放 · 三维晶面已叠加</div></div></section><aside className="sidebar"><section className="panel summary"><span className="eyebrow">STRUCTURE SUMMARY</span><h3>晶格参数</h3><div className="summary-grid"><div><span>晶格类型</span><b>FCC</b></div><div><span>晶格常数</span><b>4.05 Å</b></div><div><span>理论密度</span><b>2.70 g/cm³</b></div><div><span>当前温度</span><b>298 K</b></div></div></section><section className="panel"><div className="panel-title"><div><span className="eyebrow">DEFECT LIBRARY</span><h3>缺陷类型</h3></div><span className="count">3 MODELS</span></div><div className="defect-list"><DefectCard type="vacancy" active={defect === 'vacancy'} onClick={() => setDefect('vacancy')} title="空位缺陷" subtitle="原子位置缺失" color={colors.vacancy} /><DefectCard type="substitution" active={defect === 'substitution'} onClick={() => setDefect('substitution')} title="替位缺陷" subtitle="异质原子替换" color={colors.substitution} /><DefectCard type="dislocation" active={defect === 'dislocation'} onClick={() => setDefect('dislocation')} title="刃型位错" subtitle="局部滑移面错位" color="#ef8d86" /></div></section><section className="panel controls"><div className="panel-title"><div><span className="eyebrow">ANALYSIS CONTROLS</span><h3>分析参数</h3></div></div><label>晶胞数量 <output>{cells} × {cells} × {cells}</output><input type="range" min="3" max="5" value={cells} onChange={event => setCells(Number(event.target.value))} /></label><label>晶面透明度 <output>{Math.round(planeOpacity * 100)}%</output><input type="range" min="0" max=".3" step=".01" value={planeOpacity} onChange={event => setPlaneOpacity(Number(event.target.value))} /></label><button className={showBonds ? 'toggle active' : 'toggle'} onClick={() => setShowBonds(value => !value)}><span className="toggle-dot" />显示最近邻连接</button></section><section className="panel metrics-panel"><span className="eyebrow">DEFECT METRICS</span><h3>结构指标</h3><div className="metric-row"><div><span>原子数</span><b>{metrics.atoms}</b></div><div><span>平均配位</span><b>{metrics.neighbors}</b></div><div><span>局部应变</span><b>{metrics.strain}</b></div></div><p>指标为演示计算结果，后续可接入真实晶体结构文件与模拟数据。</p></section>{notice && <div className="toast" onClick={() => setNotice('')}>{notice}<span>×</span></div>}</aside></main></div>;
 }
